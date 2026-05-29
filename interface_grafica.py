@@ -125,6 +125,10 @@ button[kind="secondary"]:hover { background: #e8e8e8 !important; border-color: #
     color: #999; word-break: break-all; line-height: 1.4;
 }
 hr { border-color: #ebebeb !important; margin: 1.2rem 0 !important; }
+/* Alinha input e botão pela base */
+[data-testid="stHorizontalBlock"]:has([data-testid="stTextInput"]) {
+    align-items: flex-end !important;
+}
 </style>
 """
 st.markdown(CSS, unsafe_allow_html=True)
@@ -305,9 +309,7 @@ def _tela_busca() -> None:
             label_visibility="collapsed",
         )
     with col_btn:
-        st.markdown("<div style='padding-top:1.75rem'>", unsafe_allow_html=True)
         buscar = st.button("🔍 Buscar", type="primary", use_container_width=True)
-        st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown("<hr>", unsafe_allow_html=True)
 
