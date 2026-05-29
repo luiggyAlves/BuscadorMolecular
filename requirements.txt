@@ -1,0 +1,27 @@
+# Dependências do BuscadorMolecular
+# Instalar com: pip install -r requirements.txt
+
+# Framework de deep learning (suporte GPU via CUDA)
+torch>=2.0.0
+
+# Modelos de linguagem (MolFormer-XL via HuggingFace)
+transformers>=4.35.0
+
+# Necessário para positional encodings do MolFormer
+einops>=0.6.0
+
+# Banco vetorial com persistência em disco
+chromadb>=0.4.0
+
+# Quimioinformática — validação e canonicalização de SMILES
+# Instalar via conda recomendado: conda install -c conda-forge rdkit
+rdkit>=2023.3.1
+
+# Manipulação de dados tabulares (leitura de CSV da COCONUT)
+pandas>=2.0.0
+
+# Barra de progresso para população do banco
+tqdm>=4.65.0
+
+# Álgebra linear (mean pooling, normalização)
+numpy>=1.24.0
