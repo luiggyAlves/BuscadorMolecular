@@ -14,7 +14,8 @@ preparador_smiles.py          ← RDKit: validação e canonicalização
 gerenciador_banco_vetorial.py ← ChromaDB: inserção e consulta vetorial
 carregador_nubbed.py          ← Leitura do SDF da NuBBED
 popular_banco.py              ← Script: popula o banco (executável)
-buscar_similares.py           ← Script: busca por query (executável)
+buscar_similares.py           ← CLI: busca por query no terminal
+interface_grafica.py          ← Interface web: busca visual no navegador
 ```
 
 ---
@@ -46,7 +47,7 @@ conda activate buscador
 ### Passo 3 — Instalar demais dependências
 
 ```powershell
-pip install torch "transformers==4.38.0" einops chromadb pandas tqdm numpy
+pip install torch "transformers==4.38.0" einops chromadb pandas tqdm numpy streamlit Pillow
 ```
 
 > **Versão do transformers:** use obrigatoriamente `transformers==4.38.0`. Versões 4.40+ removeram o módulo `transformers.onnx` que o `configuration_molformer.py` do MolFormer-XL ainda importa, causando `ModuleNotFoundError`.
@@ -67,7 +68,15 @@ python popular_banco.py --caminho_nubbed nubbedb-05-2026.sdf --caminho_banco ./b
 
 O script exibe barra de progresso. Se for interrompido, rode o mesmo comando novamente — ele retoma de onde parou sem reprocessar o que já foi inserido.
 
-### Passo 6 — Buscar moléculas similares
+### Passo 6a — Buscar via interface gráfica (recomendado)
+
+```powershell
+streamlit run interface_grafica.py
+```
+
+O navegador abre automaticamente em `http://localhost:8501`. Cole ou digite o SMILES no campo de busca e clique em **Buscar**. Os resultados aparecem como cards com imagem estrutural, ID NuBBED e score de similaridade.
+
+### Passo 6b — Buscar via linha de comando (CLI)
 
 ```powershell
 python buscar_similares.py --smiles_consulta "CC(=O)Oc1ccccc1C(=O)O" --quantidade_resultados 10 --caminho_banco ./banco_vetorial
@@ -83,6 +92,26 @@ python buscar_similares.py --smiles_consulta "CC(=O)Oc1ccccc1C(=O)O" --quantidad
 | `--caminho_banco` | Diretório de persistência ChromaDB | `./banco_vetorial` |
 | `--tamanho_lote` | Moléculas por batch de vetorização | `64` |
 | `--dispositivo` | `cuda` ou `cpu` (auto-detectado se omitido) | automático |
+
+## Interface gráfica (interface_grafica.py)
+
+Aplicação web construída com **Streamlit**, inspirada no [COCONUT Natural Products Database](https://coconut.naturalproducts.net).
+
+**Funcionalidades:**
+
+- Campo de busca por SMILES com exemplos rápidos pré-carregados (Aspirina, Cafeína, Quercetina, Resveratrol)
+- Slider para definir o número de resultados K (1–50)
+- Seletor de dispositivo: Automático / CPU / CUDA
+- Preview da molécula query com imagem estrutural gerada pelo RDKit
+- Grade de resultados em 3 colunas com:
+  - Imagem estrutural de cada molécula
+  - ID NuBBED e posição no ranking
+  - Badge de similaridade em percentual
+  - Barra de progresso proporcional ao score
+  - SMILES completo em fonte monospace
+- Carregamento do modelo e do banco em cache — buscas subsequentes são instantâneas
+
+---
 
 ## Parâmetros do buscar_similares.py
 
@@ -154,6 +183,7 @@ BuscadorMolecular/
 ├── carregador_nubbed.py
 ├── popular_banco.py
 ├── buscar_similares.py
+├── interface_grafica.py
 ├── requirements.txt
 └── README.md
 ```

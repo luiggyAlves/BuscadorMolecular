@@ -25,3 +25,9 @@ tqdm>=4.65.0
 
 # Álgebra linear (mean pooling, normalização)
 numpy>=1.24.0
+
+# Interface gráfica web
+streamlit>=1.28.0
+
+# Renderização de imagens moleculares (usado via RDKit Draw)
+Pillow>=9.0.0
