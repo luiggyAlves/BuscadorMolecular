@@ -47,36 +47,30 @@ st.markdown("""
 [data-testid="stHeader"] { background: transparent; }
 footer { visibility: hidden; }
 
-/* Hero */
-.bm-hero {
-    background: linear-gradient(135deg, #0d3d22 0%, #1e7a47 100%);
-    color: white;
-    text-align: center;
-    padding: 2.8rem 1.5rem 2.4rem;
-    margin: -4rem -4rem 2rem -4rem;
-}
-.bm-hero h1 { font-size: 2.4rem; font-weight: 800; margin-bottom: 0.4rem; letter-spacing: -0.5px; }
-.bm-hero p  { font-size: 1rem; opacity: 0.85; margin: 0; }
-.bm-hero .bm-badge {
-    display: inline-block;
-    background: rgba(255,255,255,0.15);
-    border: 1px solid rgba(255,255,255,0.3);
-    color: white;
-    padding: 0.25rem 0.8rem;
-    border-radius: 20px;
-    font-size: 0.8rem;
-    margin-top: 0.8rem;
-    font-weight: 600;
-    letter-spacing: 0.04em;
+/* Body centralizado com margens */
+.block-container {
+    max-width: 1200px !important;
+    padding-left: 2rem !important;
+    padding-right: 2rem !important;
+    margin: 0 auto !important;
 }
 
-/* Painel de busca */
-.bm-search-panel {
-    background: white;
-    border-radius: 14px;
-    padding: 1.5rem 1.5rem 1.2rem;
-    box-shadow: 0 2px 14px rgba(0,0,0,0.07);
-    margin-bottom: 1.5rem;
+/* Hero — flat, sem gradiente */
+.bm-hero {
+    background: #1a6b3c;
+    color: white;
+    text-align: center;
+    padding: 1.8rem 1.5rem 1.6rem;
+    margin: -4rem -4rem 2rem -4rem;
+    border-bottom: 3px solid #145530;
+}
+.bm-hero h1 { font-size: 1.75rem; font-weight: 700; margin-bottom: 0.25rem; letter-spacing: -0.2px; }
+.bm-hero p  { font-size: 0.88rem; opacity: 0.78; margin: 0; }
+
+/* Campo de busca */
+[data-testid="stTextInput"] input {
+    border-radius: 8px !important;
+    font-size: 0.95rem !important;
 }
 
 /* Botão buscar */
@@ -152,7 +146,8 @@ def _mol_para_png(smiles: str, largura: int = 300, altura: int = 200) -> bytes |
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         return None
-    img = Draw.MolToImage(mol, size=(largura, altura))
+    # Renderiza em 2× para melhor nitidez ao exibir em tamanho menor
+    img = Draw.MolToImage(mol, size=(largura * 2, altura * 2))
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
@@ -168,16 +163,13 @@ if "smiles_query" not in st.session_state:
 
 st.markdown("""
 <div class="bm-hero">
-    <h1>⚗️ BuscadorMolecular</h1>
-    <p>Busca por similaridade molecular na base NuBBED</p>
-    <span class="bm-badge">MolFormer-XL · ChromaDB · RDKit</span>
+    <h1>BuscadorMolecular</h1>
+    <p>Busca por similaridade molecular na base NuBBED — MolFormer-XL · ChromaDB · RDKit</p>
 </div>
 """, unsafe_allow_html=True)
 
 
 # ── Painel de busca ───────────────────────────────────────────────────────────
-
-st.markdown('<div class="bm-search-panel">', unsafe_allow_html=True)
 
 col_input, col_btn = st.columns([6, 1])
 with col_input:
@@ -206,7 +198,6 @@ for i, (nome, smi) in enumerate(EXEMPLOS.items()):
         st.session_state["smiles_query"] = smi
         st.rerun()
 
-st.markdown("</div>", unsafe_allow_html=True)  # fecha bm-search-panel
 
 
 # ── Execução da busca ─────────────────────────────────────────────────────────
@@ -245,9 +236,9 @@ if buscar:
     st.markdown("#### Molécula query")
     with st.container(border=True):
         col_qimg, col_qinfo = st.columns([1, 3])
-        img_q = _mol_para_png(smiles_canonico, 320, 220)
+        img_q = _mol_para_png(smiles_canonico, 200, 140)
         if img_q:
-            col_qimg.image(img_q)
+            col_qimg.image(img_q, width=200)
         with col_qinfo:
             st.markdown("**SMILES canônico**")
             st.code(smiles_canonico, language=None)
@@ -276,9 +267,9 @@ if buscar:
             r = resultados[idx]
             with col:
                 with st.container(border=True):
-                    img = _mol_para_png(r["smiles_canonico"], 300, 200)
+                    img = _mol_para_png(r["smiles_canonico"], 220, 150)
                     if img:
-                        st.image(img, use_container_width=True)
+                        st.image(img, width=220)
                     st.markdown(
                         f'<div class="bm-card-rank">#{r["posicao"]}</div>'
                         f'<div class="bm-card-id">{r["id_molecula"]}</div>'
