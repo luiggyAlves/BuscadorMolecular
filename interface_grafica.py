@@ -15,6 +15,7 @@ import base64
 import glob
 import io
 import logging
+import shutil
 
 import streamlit as st
 from rdkit import Chem, RDLogger
@@ -22,6 +23,7 @@ from rdkit.Chem import Draw
 
 from carregador_nubbed import carregar_moleculas_nubbed
 from gerenciador_banco_vetorial import GerenciadorBancoVetorial
+from logger_buscas import registrar_busca
 from preparador_smiles import canonicalizar_smiles
 from vetorizador_chemberta import VetorizadorChemBERTa
 from vetorizador_fingerprint import VetorizadorFingerprint
@@ -305,12 +307,22 @@ def _popular_banco_lazy(
 
 # ── Tela de inicialização do banco ────────────────────────────────────────────
 
-def _tela_inicializacao(caminho_sdf: str) -> None:
+def _tela_inicializacao(caminho_sdf: str, metodo: str) -> None:
     """Popula o banco vetorial com feedback visual em tempo real."""
 
-    st.markdown("### Inicializando banco vetorial")
+    st.markdown(f"### Banco vetorial — {metodo}")
     st.caption(f"Arquivo de entrada: `{caminho_sdf}`")
     st.markdown("---")
+
+    if "populacao_iniciada" not in st.session_state:
+        st.info(
+            f"O banco vetorial está vazio. "
+            f"Clique no botão abaixo para iniciar a vetorização com **{metodo}**."
+        )
+        if st.button("▶ Iniciar vetorização", type="primary"):
+            st.session_state["populacao_iniciada"] = True
+            st.rerun()
+        return
 
     # ── Etapas 1–3: carregamento e validação ──────────────────────────────────
     with st.status("Preparando moléculas...", expanded=True) as status_prep:
@@ -329,7 +341,7 @@ def _tela_inicializacao(caminho_sdf: str) -> None:
         st.write(f"✔ {total_validos:,} SMILES válidos ({total_sdf - total_validos} descartados)")
 
         st.write("🗄️ Verificando entradas já presentes no banco...")
-        banco = GerenciadorBancoVetorial(CAMINHO_BANCO, nome_colecao=NOME_COLECAO)  # init direto, fora do cache
+        banco = _carregar_banco(COLECAO_POR_METODO[metodo])
         ids_existentes = banco.obter_ids_existentes()
         pendentes = [(s, i) for s, i in pares_validos if i not in ids_existentes]
         total_pendentes = len(pendentes)
@@ -346,20 +358,27 @@ def _tela_inicializacao(caminho_sdf: str) -> None:
         status_prep.update(label="Preparação concluída", state="complete")
 
     # ── Etapa 4: vetorização e inserção com barra de progresso ────────────────
-    st.markdown(f"**Vetorizando {total_pendentes:,} moléculas com MolFormer-XL...**")
+    lote = LOTE_POR_METODO[metodo]
+    st.markdown(f"**Vetorizando {total_pendentes:,} moléculas com {metodo}...**")
     barra       = st.progress(0.0)
     texto_lote  = st.empty()
 
-    vetorizador = VetorizadorMolFormer(dispositivo=None)
+    if metodo == "MolFormer-XL":
+        vetorizador = VetorizadorMolFormer(dispositivo=None)
+    elif metodo == "ChemBERTa-2":
+        vetorizador = VetorizadorChemBERTa(dispositivo=None)
+    else:
+        vetorizador = VetorizadorFingerprint()
+
     smiles_list = [p[0] for p in pendentes]
     ids_list    = [p[1] for p in pendentes]
     total_inserido = 0
 
-    for ini in range(0, total_pendentes, TAMANHO_LOTE):
-        lote_smiles = smiles_list[ini : ini + TAMANHO_LOTE]
-        lote_ids    = ids_list[ini : ini + TAMANHO_LOTE]
+    for ini in range(0, total_pendentes, lote):
+        lote_smiles = smiles_list[ini : ini + lote]
+        lote_ids    = ids_list[ini : ini + lote]
 
-        embeddings = vetorizador.vetorizar_lote(lote_smiles, tamanho_lote=TAMANHO_LOTE)
+        embeddings = vetorizador.vetorizar_lote(lote_smiles, tamanho_lote=lote)
 
         smiles_ok, ids_ok, embs_ok = [], [], []
         for s, id_, emb in zip(lote_smiles, lote_ids, embeddings):
@@ -372,7 +391,7 @@ def _tela_inicializacao(caminho_sdf: str) -> None:
             banco.inserir_lote(ids_ok, embs_ok, smiles_ok, ids_ok)
             total_inserido += len(ids_ok)
 
-        processadas = min(ini + TAMANHO_LOTE, total_pendentes)
+        processadas = min(ini + lote, total_pendentes)
         progresso   = processadas / total_pendentes
         barra.progress(progresso)
         texto_lote.caption(
@@ -392,29 +411,11 @@ def _tela_inicializacao(caminho_sdf: str) -> None:
 
 # ── Tela de busca ─────────────────────────────────────────────────────────────
 
-def _tela_busca() -> None:
+def _tela_busca(metodo: str) -> None:
     """Interface principal de busca por similaridade."""
 
     if "smiles_query" not in st.session_state:
         st.session_state["smiles_query"] = ""
-
-    st.markdown("""
-<div class="bm-title">Buscar compostos</div>
-<div class="bm-subtitle">
-  Explore a base NuBBED de produtos naturais e descubra compostos similares
-  por similaridade vetorial.
-</div>
-""", unsafe_allow_html=True)
-
-    metodo = st.radio(
-        "Método de vetorização",
-        options=METODOS,
-        horizontal=True,
-        key="metodo_busca",
-    )
-    st.caption(DESCRICOES_METODO[metodo])
-
-    st.markdown("<div style='margin-top:0.8rem'></div>", unsafe_allow_html=True)
 
     col_input, col_btn = st.columns([8, 1])
     with col_input:
@@ -426,6 +427,12 @@ def _tela_busca() -> None:
         )
     with col_btn:
         buscar = st.button("🔍 Buscar", type="primary", use_container_width=True)
+
+    cols_ex = st.columns(len(EXEMPLOS))
+    for col, (nome, smi) in zip(cols_ex, EXEMPLOS.items()):
+        if col.button(nome, type="secondary", key=f"ex_{nome}"):
+            st.session_state["smiles_query"] = smi
+            st.rerun()
 
     st.markdown("<hr>", unsafe_allow_html=True)
 
@@ -451,6 +458,8 @@ def _tela_busca() -> None:
         if metodo == "MolFormer-XL":
             with st.spinner("Carregando MolFormer-XL..."):
                 vetorizador = _carregar_vetorizador_molformer(dispositivo)
+            if banco.total_moleculas_indexadas() == 0:
+                _popular_banco_lazy(banco, vetorizador, metodo)
         elif metodo == "ChemBERTa-2":
             with st.spinner("Carregando ChemBERTa-2..."):
                 vetorizador = _carregar_vetorizador_chemberta(dispositivo)
@@ -469,7 +478,10 @@ def _tela_busca() -> None:
             st.stop()
 
         with st.spinner("Consultando banco vetorial..."):
-            resultados = banco.buscar_moleculas_similares(embedding, k)
+            resultados_completos = banco.buscar_moleculas_similares(embedding, max(k, 20))
+
+        registrar_busca(metodo, smiles_canonico, resultados_completos)
+        resultados = resultados_completos[:k]
 
         st.markdown("<hr>", unsafe_allow_html=True)
         st.markdown(
@@ -483,8 +495,33 @@ def _tela_busca() -> None:
 # ── Roteamento principal ──────────────────────────────────────────────────────
 
 def main() -> None:
-    banco_temp = GerenciadorBancoVetorial(CAMINHO_BANCO, nome_colecao=NOME_COLECAO)  # MolFormer é o padrão
-    banco_vazio = banco_temp.total_moleculas_indexadas() == 0
+    if "banco_limpo" not in st.session_state:
+        shutil.rmtree(CAMINHO_BANCO, ignore_errors=True)
+        _carregar_banco.clear()
+        st.session_state["banco_limpo"] = True
+
+    st.markdown("""
+<div class="bm-title">Buscar compostos</div>
+<div class="bm-subtitle">
+  Explore a base NuBBED de produtos naturais e descubra compostos similares
+  por similaridade vetorial.
+</div>
+""", unsafe_allow_html=True)
+
+    metodo_atual = st.session_state.get("metodo_global", METODOS[0])
+    banco_vazio = _carregar_banco(COLECAO_POR_METODO[metodo_atual]).total_moleculas_indexadas() == 0
+
+    metodo = st.radio(
+        "Método de vetorização",
+        options=METODOS,
+        horizontal=True,
+        key="metodo_global",
+        disabled=not banco_vazio,
+    )
+    st.caption(DESCRICOES_METODO[metodo])
+    st.markdown("<div style='margin-top:0.8rem'></div>", unsafe_allow_html=True)
+
+    nome_colecao = COLECAO_POR_METODO[metodo]
 
     if banco_vazio:
         caminho_sdf = _encontrar_sdf()
@@ -494,9 +531,9 @@ def main() -> None:
                 f"Coloque o arquivo `{CAMINHO_SDF}` na mesma pasta que `interface_grafica.py`."
             )
             st.stop()
-        _tela_inicializacao(caminho_sdf)
+        _tela_inicializacao(caminho_sdf, metodo)
     else:
-        _tela_busca()
+        _tela_busca(metodo)
 
 
 main()

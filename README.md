@@ -1,189 +1,212 @@
 # BuscadorMolecular
 
-Ferramenta de busca por similaridade molecular usando embeddings do **MolFormer-XL** (IBM) e **ChromaDB** como banco de dados vetorial.
+Ferramenta de busca por similaridade molecular sobre a base **NuBBED** (Nuclei of Bioassays, Biosynthesis and Biodiversity). Dado um SMILES query, retorna as moléculas mais similares ranqueadas por score de cosseno.
 
-Dado um SMILES query, retorna as K moléculas mais similares presentes na base **NuBBED**, ranqueadas por score de similaridade de cosseno.
+Suporta três métodos de vetorização intercambiáveis, selecionados pelo usuário antes da inicialização do banco.
+
+---
+
+## Métodos de vetorização
+
+| Método | Modelo | Dimensão | Fonte |
+|---|---|---|---|
+| **MolFormer-XL** | `ibm-research/MoLFormer-XL-both-10pct` | 768 | IBM via HuggingFace |
+| **ChemBERTa-2** | `DeepChem/ChemBERTa-77M-MLM` | 768 | DeepChem via HuggingFace |
+| **Fingerprints (RDKit)** | Morgan ECFP4 | 2048 | RDKit (local) |
+
+Todos os vetores são L2-normalizados. A busca usa distância de cosseno via ChromaDB.
 
 ---
 
 ## Arquitetura
 
 ```
-vetorizador_molformer.py      ← MolFormer-XL: geração de embeddings
-preparador_smiles.py          ← RDKit: validação e canonicalização
+interface_grafica.py          ← Interface web Streamlit
+logger_buscas.py              ← Registro de buscas em SQLite
+exportar_logs.py              ← CLI para exportar/limpar logs
 gerenciador_banco_vetorial.py ← ChromaDB: inserção e consulta vetorial
+vetorizador_molformer.py      ← Embeddings MolFormer-XL
+vetorizador_chemberta.py      ← Embeddings ChemBERTa-2
+vetorizador_fingerprint.py    ← Fingerprints Morgan (RDKit)
+preparador_smiles.py          ← Validação e canonicalização de SMILES
 carregador_nubbed.py          ← Leitura do SDF da NuBBED
-popular_banco.py              ← Script: popula o banco (executável)
-buscar_similares.py           ← CLI: busca por query no terminal
-interface_grafica.py          ← Interface web: busca visual no navegador
+carregador_coconut.py         ← Leitura de CSV da COCONUT
+popular_banco.py              ← CLI para popular o banco via terminal
+buscar_similares.py           ← CLI para buscar via terminal
 ```
 
 ---
 
 ## Pré-requisitos
 
-- [Miniconda](https://docs.conda.io/en/latest/miniconda.html) ou Anaconda instalado
-- (Opcional) GPU NVIDIA com CUDA para vetorização mais rápida
-- Arquivo SDF da base NuBBED na pasta do projeto
+- [Miniconda](https://docs.conda.io/en/latest/miniconda.html) ou Anaconda
+- Arquivo SDF da NuBBED na pasta do projeto (`nubbedb-05-2026.sdf`)
+- GPU NVIDIA com CUDA 12.1 (opcional — CPU funciona, mas é mais lento)
 
 ---
 
-## Passo a passo completo
+## Instalação
 
-### Passo 1 — Criar ambiente conda com RDKit
-
-> **Importante:** use conda para instalar o RDKit. A instalação via `pip` no ambiente base do Windows pode ser bloqueada pela política de Application Control.
+### 1. Criar o ambiente conda
 
 ```powershell
-conda create -n buscador python=3.10 rdkit -c conda-forge -y
+conda env create -f environment.yml
 ```
 
-### Passo 2 — Ativar o ambiente
+### 2. Ativar o ambiente
 
 ```powershell
-conda activate buscador
+conda activate buscadormolecular
 ```
 
-### Passo 3 — Instalar demais dependências
+### 3. Verificar instalação
 
 ```powershell
-pip install torch "transformers==4.38.0" einops chromadb pandas tqdm numpy streamlit Pillow
+python -c "import rdkit, torch, transformers, chromadb, streamlit; print('OK')"
 ```
 
-> **Versão do transformers:** use obrigatoriamente `transformers==4.38.0`. Versões 4.40+ removeram o módulo `transformers.onnx` que o `configuration_molformer.py` do MolFormer-XL ainda importa, causando `ModuleNotFoundError`.
+> **Windows — RDKit bloqueado por política de segurança**
+>
+> Se ocorrer `ImportError: DLL load failed while importing rdmolfiles`, execute:
+> ```powershell
+> Get-ChildItem -Path "C:\Users\<usuario>\miniconda3\envs\buscadormolecular" -Recurse -Filter "*.pyd" | Unblock-File
+> ```
+> Isso remove a marca "baixado da internet" dos arquivos do ambiente.
 
-> **GPU (opcional):** para instalar PyTorch com suporte CUDA, consulte [pytorch.org/get-started](https://pytorch.org/get-started/locally/) e instale a versão compatível com sua versão de CUDA **antes** do comando acima.
-
-### Passo 4 — Entrar na pasta do projeto
+### Atualizar após mudanças no environment.yml
 
 ```powershell
-cd C:\Users\Luiggy\BuscadorMolecular
+conda env update -f environment.yml --prune
 ```
 
-### Passo 5 — Popular o banco vetorial
+---
+
+## Executar a interface
 
 ```powershell
-python popular_banco.py --caminho_nubbed nubbedb-05-2026.sdf --caminho_banco ./banco_vetorial
-```
-
-O script exibe barra de progresso. Se for interrompido, rode o mesmo comando novamente — ele retoma de onde parou sem reprocessar o que já foi inserido.
-
-### Passo 6a — Buscar via interface gráfica (recomendado)
-
-```powershell
+conda activate buscadormolecular
 streamlit run interface_grafica.py
 ```
 
-O navegador abre automaticamente em `http://localhost:8501`. Cole ou digite o SMILES no campo de busca e clique em **Buscar**. Os resultados aparecem como cards com imagem estrutural, ID NuBBED e score de similaridade.
+O navegador abre em `http://localhost:8501`.
 
-### Passo 6b — Buscar via linha de comando (CLI)
+---
+
+## Fluxo de uso da interface
+
+```
+1. Selecionar método de vetorização (MolFormer-XL / ChemBERTa-2 / Fingerprints)
+        ↓
+2. Clicar em "▶ Iniciar vetorização"
+        ↓
+3. Aguardar a população do banco (barra de progresso)
+        ↓
+4. Interface de busca liberada — método travado para a sessão
+        ↓
+5. Digitar SMILES ou clicar em molécula de exemplo
+        ↓
+6. Definir K (número de resultados) e clicar em "Buscar"
+        ↓
+7. Resultados em cards com estrutura, ID NuBBED e % de similaridade
+```
+
+**Comportamento por sessão:**
+- O banco vetorial é **esvaziado automaticamente** a cada nova sessão
+- O método de vetorização **não pode ser alterado** após o banco ser populado
+- A vetorização **não inicia automaticamente** — requer clique do usuário
+
+---
+
+## Interface de busca
+
+- **Moléculas de exemplo:** Aspirina, Cafeína, Quercetina, Resveratrol — clique para preencher o campo
+- **Slider K:** define quantos resultados exibir (1–50)
+- **Cards de resultado:** imagem estrutural, ID NuBBED, score de similaridade em %, SMILES
+
+---
+
+## Logs de busca
+
+Todas as buscas são registradas automaticamente em `logs/buscas.db` (SQLite). Os logs **não são expostos na interface** — são acessíveis apenas via terminal.
+
+Cada registro contém:
+
+```json
+{
+  "timestamp": "2026-06-02T14:30:00",
+  "metodo_busca": "MolFormer-XL",
+  "query": "CC(=O)Oc1ccccc1C(=O)O",
+  "retornos": [
+    { "smile_retorno": "...", "percentual_relevancia": 0.97 }
+  ]
+}
+```
+
+São armazenados os **20 primeiros retornos** de cada busca, independente do K exibido na tela.
+
+### Comandos de log
 
 ```powershell
-python buscar_similares.py --smiles_consulta "CC(=O)Oc1ccccc1C(=O)O" --quantidade_resultados 10 --caminho_banco ./banco_vetorial
+# Exportar todos os logs (JSON no terminal)
+python exportar_logs.py
+
+# Salvar em arquivo JSON
+python exportar_logs.py --saida logs.json
+
+# Exportar como CSV
+python exportar_logs.py --formato csv --saida logs.csv
+
+# Filtrar por método
+python exportar_logs.py --metodo "MolFormer-XL"
+python exportar_logs.py --metodo "ChemBERTa-2"
+python exportar_logs.py --metodo "Fingerprints (RDKit)"
+
+# Filtrar por data
+python exportar_logs.py --desde 2026-06-01
+
+# Últimas N buscas
+python exportar_logs.py --ultimas 50
+
+# Limpar todos os logs
+python exportar_logs.py --limpar
 ```
 
----
-
-## Parâmetros do popular_banco.py
-
-| Parâmetro | Descrição | Padrão |
-|---|---|---|
-| `--caminho_nubbed` | Arquivo SDF da NuBBED | obrigatório |
-| `--caminho_banco` | Diretório de persistência ChromaDB | `./banco_vetorial` |
-| `--tamanho_lote` | Moléculas por batch de vetorização | `64` |
-| `--dispositivo` | `cuda` ou `cpu` (auto-detectado se omitido) | automático |
-
-## Interface gráfica (interface_grafica.py)
-
-Aplicação web construída com **Streamlit**, inspirada no [COCONUT Natural Products Database](https://coconut.naturalproducts.net).
-
-**Funcionalidades:**
-
-- Campo de busca por SMILES com exemplos rápidos pré-carregados (Aspirina, Cafeína, Quercetina, Resveratrol)
-- Slider para definir o número de resultados K (1–50)
-- Seletor de dispositivo: Automático / CPU / CUDA
-- Preview da molécula query com imagem estrutural gerada pelo RDKit
-- Grade de resultados em 3 colunas com:
-  - Imagem estrutural de cada molécula
-  - ID NuBBED e posição no ranking
-  - Badge de similaridade em percentual
-  - Barra de progresso proporcional ao score
-  - SMILES completo em fonte monospace
-- Carregamento do modelo e do banco em cache — buscas subsequentes são instantâneas
+> A pasta `logs/` é criada automaticamente na primeira busca. Pode ser apagada sem problema — será recriada.
 
 ---
 
-## Parâmetros do buscar_similares.py
-
-| Parâmetro | Descrição | Padrão |
-|---|---|---|
-| `--smiles_consulta` | SMILES da molécula query | obrigatório |
-| `--quantidade_resultados` | K vizinhos mais próximos | `10` |
-| `--caminho_banco` | Diretório do ChromaDB | `./banco_vetorial` |
-| `--dispositivo` | `cuda` ou `cpu` | automático |
-
----
-
-## Estimativa de tempo (popular_banco.py)
-
-| Hardware | Tempo estimado |
-|---|---|
-| GPU (RTX 3080) | ~30–60 min |
-| CPU (16 cores) | ~2–4 horas |
-
----
-
-## Exemplo de saída da busca
-
-```
-Validando SMILES: 'CC(=O)Oc1ccccc1C(=O)O' ...
-SMILES canônico: 'CC(=O)Oc1ccccc1C(=O)O'
-Carregando MolFormer-XL e gerando embedding...
-Consultando banco vetorial ChromaDB...
-
-════════════════════════════════════════════════════════════════════════════════
-  BUSCA POR SIMILARIDADE MOLECULAR — MolFormer-XL + ChromaDB
-════════════════════════════════════════════════════════════════════════════════
-  Molécula query (SMILES): CC(=O)Oc1ccccc1C(=O)O
-  Resultados solicitados:  10
-  Resultados encontrados:  10
-────────────────────────────────────────────────────────────────────────────────
-  Pos  ID NuBBED              Similaridade  SMILES
-────────────────────────────────────────────────────────────────────────────────
-    1.  CNP0173930.1            0.998412  CC(=O)Oc1ccccc1C(=O)O
-    2.  CNP0001456.1            0.981033  CC(=O)Oc1ccccc1C(=O)OC
-    3.  CNP0002789.2            0.974201  OC(=O)c1ccccc1O
-   ...
-════════════════════════════════════════════════════════════════════════════════
-```
-
----
-
-## Detalhes técnicos
-
-- **Modelo**: `ibm-research/MoLFormer-XL-both-10pct` via HuggingFace Transformers
-- **Pooling**: Mean pooling sobre `last_hidden_state`, mascarado por `attention_mask`
-- **Normalização**: L2 antes de inserir e antes de consultar
-- **Métrica**: Distância de cosseno (`"hnsw:space": "cosine"` no ChromaDB)
-- **Score**: `similaridade = 1 - distância_cosseno` (0 = oposto, 1 = idêntico)
-- **Idempotência**: IDs já presentes no banco são ignorados automaticamente
-
----
-
-## Estrutura de arquivos gerados
+## Estrutura do projeto
 
 ```
 BuscadorMolecular/
-├── banco_vetorial/               ← ChromaDB persistente (gerado pelo popular_banco.py)
-│   └── chroma.sqlite3
-├── nubbedb-05-2026.sdf           ← Arquivo de entrada da NuBBED
-├── vetorizador_molformer.py
-├── preparador_smiles.py
+├── interface_grafica.py
+├── logger_buscas.py
+├── exportar_logs.py
 ├── gerenciador_banco_vetorial.py
+├── vetorizador_molformer.py
+├── vetorizador_chemberta.py
+├── vetorizador_fingerprint.py
+├── preparador_smiles.py
 ├── carregador_nubbed.py
+├── carregador_coconut.py
 ├── popular_banco.py
 ├── buscar_similares.py
-├── interface_grafica.py
+├── environment.yml
 ├── requirements.txt
-└── README.md
+├── nubbedb-05-2026.sdf        ← não versionado
+├── banco_vetorial/            ← não versionado (gerado em runtime)
+└── logs/                      ← não versionado (gerado em runtime)
+```
+
+---
+
+## .gitignore recomendado
+
+```
+banco_vetorial/
+logs/
+*.sdf
+__pycache__/
+*.pyc
+.streamlit/secrets.toml
 ```

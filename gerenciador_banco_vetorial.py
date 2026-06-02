@@ -129,7 +129,7 @@ class GerenciadorBancoVetorial:
         Retorna:
             Lista de dicionários com campos:
                 - posicao:          Posição no ranking (1-indexado).
-                - id_coconut:       Identificador COCONUT da molécula.
+                - id_molecula:      Identificador da molécula na base.
                 - smiles_canonico:  SMILES canônico da molécula encontrada.
                 - similaridade:     Score de similaridade (1 - distância_cosseno).
         """
@@ -168,3 +168,17 @@ class GerenciadorBancoVetorial:
     def total_moleculas_indexadas(self) -> int:
         """Retorna o número total de moléculas presentes na coleção."""
         return self.colecao_moleculas.count()
+
+
+def limpar_colecoes(caminho_persistencia: str, nomes_colecoes: list[str]) -> None:
+    """Apaga as coleções informadas do ChromaDB. Ignora coleções inexistentes."""
+    client = chromadb.PersistentClient(
+        path=caminho_persistencia,
+        settings=Settings(anonymized_telemetry=False),
+    )
+    for nome in nomes_colecoes:
+        try:
+            client.delete_collection(nome)
+            logger.info("Coleção '%s' apagada.", nome)
+        except Exception:
+            pass
