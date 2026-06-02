@@ -23,15 +23,39 @@ from rdkit.Chem import Draw
 from carregador_nubbed import carregar_moleculas_nubbed
 from gerenciador_banco_vetorial import GerenciadorBancoVetorial
 from preparador_smiles import canonicalizar_smiles
+from vetorizador_chemberta import VetorizadorChemBERTa
+from vetorizador_fingerprint import VetorizadorFingerprint
 from vetorizador_molformer import VetorizadorMolFormer
 
 RDLogger.DisableLog("rdApp.*")
 logging.basicConfig(level=logging.WARNING)
 
-CAMINHO_BANCO   = "./banco_vetorial"
-NOME_COLECAO    = "moleculas_nubbed"
-CAMINHO_SDF     = "nubbedb-05-2026.sdf"
-TAMANHO_LOTE    = 64
+CAMINHO_BANCO              = "./banco_vetorial"
+NOME_COLECAO               = "moleculas_nubbed"
+NOME_COLECAO_CHEMBERTA     = "moleculas_nubbed_chemberta"
+NOME_COLECAO_FINGERPRINTS  = "moleculas_nubbed_fingerprints"
+CAMINHO_SDF                = "nubbedb-05-2026.sdf"
+TAMANHO_LOTE               = 64
+
+METODOS = ["MolFormer-XL", "ChemBERTa-2", "Fingerprints (RDKit)"]
+
+DESCRICOES_METODO = {
+    "MolFormer-XL":         "embeddings do MolFormer-XL — Transformer treinado em 1,1 bi de moléculas · dim 768",
+    "ChemBERTa-2":          "embeddings do ChemBERTa-2 — RoBERTa treinado em ZINC/PubChem · dim 768",
+    "Fingerprints (RDKit)": "fingerprints Morgan ECFP4 gerados pelo RDKit · dim 2048 · similaridade por cosseno",
+}
+
+COLECAO_POR_METODO = {
+    "MolFormer-XL":         NOME_COLECAO,
+    "ChemBERTa-2":          NOME_COLECAO_CHEMBERTA,
+    "Fingerprints (RDKit)": NOME_COLECAO_FINGERPRINTS,
+}
+
+LOTE_POR_METODO = {
+    "MolFormer-XL":         64,
+    "ChemBERTa-2":          32,
+    "Fingerprints (RDKit)": 512,
+}
 
 EXEMPLOS = {
     "Aspirina":    "CC(=O)Oc1ccccc1C(=O)O",
@@ -137,13 +161,23 @@ st.markdown(CSS, unsafe_allow_html=True)
 # ── Utilitários ───────────────────────────────────────────────────────────────
 
 @st.cache_resource(show_spinner=False)
-def _carregar_vetorizador(dispositivo: str | None) -> VetorizadorMolFormer:
+def _carregar_vetorizador_molformer(dispositivo: str | None) -> VetorizadorMolFormer:
     return VetorizadorMolFormer(dispositivo=dispositivo)
 
 
 @st.cache_resource(show_spinner=False)
-def _carregar_banco() -> GerenciadorBancoVetorial:
-    return GerenciadorBancoVetorial(CAMINHO_BANCO, nome_colecao=NOME_COLECAO)
+def _carregar_vetorizador_chemberta(dispositivo: str | None) -> VetorizadorChemBERTa:
+    return VetorizadorChemBERTa(dispositivo=dispositivo)
+
+
+@st.cache_resource(show_spinner=False)
+def _carregar_vetorizador_fingerprint() -> VetorizadorFingerprint:
+    return VetorizadorFingerprint()
+
+
+@st.cache_resource(show_spinner=False)
+def _carregar_banco(nome_colecao: str) -> GerenciadorBancoVetorial:
+    return GerenciadorBancoVetorial(CAMINHO_BANCO, nome_colecao=nome_colecao)
 
 
 def _encontrar_sdf() -> str | None:
@@ -198,6 +232,77 @@ def _render_cards(resultados: list[dict]) -> str:
     return '<div class="mol-grid">' + "".join(cards) + "</div>"
 
 
+# ── Inicialização lazy (ChemBERTa-2 / Fingerprints) ──────────────────────────
+
+def _popular_banco_lazy(
+    banco: GerenciadorBancoVetorial,
+    vetorizador,
+    metodo: str,
+) -> None:
+    """Popula o banco do método selecionado com barra de progresso inline."""
+    caminho_sdf = _encontrar_sdf()
+    if caminho_sdf is None:
+        st.error(
+            "Arquivo SDF não encontrado. "
+            f"Coloque `{CAMINHO_SDF}` na pasta do projeto."
+        )
+        st.stop()
+
+    placeholder_status = st.empty()
+    placeholder_status.info(
+        f"Banco **{metodo}** ainda não inicializado — vetorizando moléculas..."
+    )
+
+    moleculas_brutas = carregar_moleculas_nubbed(caminho_sdf)
+    pares_validos: list[tuple[str, str]] = []
+    for mol in moleculas_brutas:
+        can = canonicalizar_smiles(mol["smiles_bruto"])
+        if can:
+            pares_validos.append((can, mol["id_nubbed"]))
+
+    ids_existentes = banco.obter_ids_existentes()
+    pendentes = [(s, i) for s, i in pares_validos if i not in ids_existentes]
+
+    if not pendentes:
+        placeholder_status.empty()
+        return
+
+    total = len(pendentes)
+    barra = st.progress(0.0)
+    texto_lote = st.empty()
+    smiles_list = [p[0] for p in pendentes]
+    ids_list    = [p[1] for p in pendentes]
+    lote        = LOTE_POR_METODO[metodo]
+    total_inserido = 0
+
+    for ini in range(0, total, lote):
+        lote_smiles = smiles_list[ini : ini + lote]
+        lote_ids    = ids_list[ini : ini + lote]
+
+        embeddings = vetorizador.vetorizar_lote(lote_smiles, tamanho_lote=lote)
+
+        smiles_ok, ids_ok, embs_ok = [], [], []
+        for s, id_, emb in zip(lote_smiles, lote_ids, embeddings):
+            if emb is not None:
+                smiles_ok.append(s)
+                ids_ok.append(id_)
+                embs_ok.append(emb)
+
+        if ids_ok:
+            banco.inserir_lote(ids_ok, embs_ok, smiles_ok, ids_ok)
+            total_inserido += len(ids_ok)
+
+        processadas = min(ini + lote, total)
+        barra.progress(processadas / total)
+        texto_lote.caption(
+            f"{processadas:,} / {total:,} vetorizadas  ·  {total_inserido:,} inseridas"
+        )
+
+    barra.empty()
+    texto_lote.empty()
+    placeholder_status.empty()
+
+
 # ── Tela de inicialização do banco ────────────────────────────────────────────
 
 def _tela_inicializacao(caminho_sdf: str) -> None:
@@ -224,7 +329,7 @@ def _tela_inicializacao(caminho_sdf: str) -> None:
         st.write(f"✔ {total_validos:,} SMILES válidos ({total_sdf - total_validos} descartados)")
 
         st.write("🗄️ Verificando entradas já presentes no banco...")
-        banco = GerenciadorBancoVetorial(CAMINHO_BANCO, nome_colecao=NOME_COLECAO)
+        banco = GerenciadorBancoVetorial(CAMINHO_BANCO, nome_colecao=NOME_COLECAO)  # init direto, fora do cache
         ids_existentes = banco.obter_ids_existentes()
         pendentes = [(s, i) for s, i in pares_validos if i not in ids_existentes]
         total_pendentes = len(pendentes)
@@ -296,9 +401,20 @@ def _tela_busca() -> None:
     st.markdown("""
 <div class="bm-title">Buscar compostos</div>
 <div class="bm-subtitle">
-  Explore a base NuBBED de produtos naturais e descubra compostos similares usando embeddings do MolFormer-XL.
+  Explore a base NuBBED de produtos naturais e descubra compostos similares
+  por similaridade vetorial.
 </div>
 """, unsafe_allow_html=True)
+
+    metodo = st.radio(
+        "Método de vetorização",
+        options=METODOS,
+        horizontal=True,
+        key="metodo_busca",
+    )
+    st.caption(DESCRICOES_METODO[metodo])
+
+    st.markdown("<div style='margin-top:0.8rem'></div>", unsafe_allow_html=True)
 
     col_input, col_btn = st.columns([8, 1])
     with col_input:
@@ -328,18 +444,32 @@ def _tela_busca() -> None:
             st.error("SMILES inválido — verifique a notação e tente novamente.")
             st.stop()
 
-        with st.spinner("Carregando MolFormer-XL..."):
-            vetorizador = _carregar_vetorizador(dispositivo)
+        nome_colecao = COLECAO_POR_METODO[metodo]
+        banco = _carregar_banco(nome_colecao)
 
-        with st.spinner("Consultando banco vetorial..."):
-            banco = _carregar_banco()
-            embedding   = vetorizador.vetorizar_molecula(smiles_canonico)
+        # ── Carregar/popular banco do método selecionado se necessário ────────
+        if metodo == "MolFormer-XL":
+            with st.spinner("Carregando MolFormer-XL..."):
+                vetorizador = _carregar_vetorizador_molformer(dispositivo)
+        elif metodo == "ChemBERTa-2":
+            with st.spinner("Carregando ChemBERTa-2..."):
+                vetorizador = _carregar_vetorizador_chemberta(dispositivo)
+            if banco.total_moleculas_indexadas() == 0:
+                _popular_banco_lazy(banco, vetorizador, metodo)
+        else:  # Fingerprints (RDKit)
+            vetorizador = _carregar_vetorizador_fingerprint()
+            if banco.total_moleculas_indexadas() == 0:
+                _popular_banco_lazy(banco, vetorizador, metodo)
+
+        with st.spinner("Gerando vetor da molécula..."):
+            embedding = vetorizador.vetorizar_molecula(smiles_canonico)
 
         if embedding is None:
-            st.error(f"Não foi possível gerar embedding para `{smiles_canonico}`.")
+            st.error(f"Não foi possível gerar vetor para `{smiles_canonico}`.")
             st.stop()
 
-        resultados = banco.buscar_moleculas_similares(embedding, k)
+        with st.spinner("Consultando banco vetorial..."):
+            resultados = banco.buscar_moleculas_similares(embedding, k)
 
         st.markdown("<hr>", unsafe_allow_html=True)
         st.markdown(
@@ -353,7 +483,7 @@ def _tela_busca() -> None:
 # ── Roteamento principal ──────────────────────────────────────────────────────
 
 def main() -> None:
-    banco_temp = GerenciadorBancoVetorial(CAMINHO_BANCO, nome_colecao=NOME_COLECAO)
+    banco_temp = GerenciadorBancoVetorial(CAMINHO_BANCO, nome_colecao=NOME_COLECAO)  # MolFormer é o padrão
     banco_vazio = banco_temp.total_moleculas_indexadas() == 0
 
     if banco_vazio:
